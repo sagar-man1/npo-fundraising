@@ -12,7 +12,8 @@
     "db:studio": "prisma studio",
     "scheduler": "tsx scripts/scheduler.ts",
     "research:now": "tsx scripts/research-now.ts",
-    "whatsapp:login": "tsx scripts/whatsapp-login.ts"
+    "whatsapp:login": "tsx scripts/whatsapp-login.ts",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",
