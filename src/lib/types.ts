@@ -50,5 +50,16 @@ export type ResearchCompanyRow = {
   sourceUrls: string[];
   notes: string | null;
   notionPageUrl: string | null;
+  discoveredBy: string;
+  createdAt: string;
   leads: ResearchLeadRow[];
+};
+
+export type JobRunRow = {
+  status: string;
+  found: number;
+  notified: boolean;
+  summary: string | null;
+  error: string | null;
+  finishedAt: string | null;
 };

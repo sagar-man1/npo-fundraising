@@ -7,6 +7,10 @@ A working dashboard for the PanIIT Alumni Foundation fundraising team. Two tabs:
 - **Research** — net-new companies and named people to approach, kept in a local
   database so the team can edit, triage and promote them into Notion.
 
+Every morning a scheduled job researches fresh prospects and sends them to WhatsApp.
+It runs as its own always-on service, so it does not depend on anyone's laptop being
+awake — see [Running it every morning](#running-it-every-morning).
+
 ## The one idea the ranking is built on
 
 A large CSR budget is worthless to PARFI if the company spends it on itself.
@@ -64,6 +68,112 @@ unless someone clicks it.
 Set `APP_PASSWORD` to put the whole app behind a shared password. Leave it empty and
 auth is skipped entirely, which is what you want for local use.
 
+---
+
+## Running it every morning
+
+Three pieces: a **research agent** that finds prospects, a **WhatsApp sender** that
+delivers them, and a **scheduler** that fires the pair daily.
+
+### 1. Research agent
+
+Set `ANTHROPIC_API_KEY` in `.env`. Each run searches the web, applies the
+grant-maker screen above, drops anything already in the pipeline, and writes what
+survives into the Research tab flagged **New**.
+
+The brief rotates by weekday (GCCs, pharma, BFSI, manufacturing, FMCG, family
+foundations, PSUs) so a week of runs covers ground instead of retreading one sector.
+It is told to return fewer prospects rather than pad with speculative ones, so a
+morning with nothing new is a valid result, not a failure.
+
+Try it before scheduling anything:
+
+```bash
+npm run research:now              # research only, no message
+npm run research:now -- --notify  # research and send the WhatsApp message
+```
+
+### 2. WhatsApp
+
+Messages are sent by driving the **real WhatsApp Web UI** in a browser, so there is
+no WhatsApp Business account and no Meta-approved template. Log in once:
+
+```bash
+npm run whatsapp:login   # opens a browser; scan the QR code with your phone
+```
+
+The session is saved in `.whatsapp-profile/` (gitignored) and reused every morning.
+Set `WHATSAPP_CONTACT` to the contact name **exactly** as it appears in your WhatsApp
+chat list — the driver searches for that string.
+
+Two interchangeable drivers, chosen with `WHATSAPP_DRIVER`:
+
+| Driver | What it does | When to use it |
+| --- | --- | --- |
+| `playwright` (default) | Clicks the search box, opens the chat, types, sends | Daily use — deterministic and costs nothing per run |
+| `computer-use` | Claude looks at screenshots and drives the mouse and keyboard | Fallback if a WhatsApp redesign breaks the selectors |
+
+The computer-use driver is a genuine fallback rather than the default because it
+costs tokens on every run and is slower and less predictable — not what you want
+for something that has to fire unattended at 7:30 every morning.
+
+### 3. Scheduler on the Mac mini
+
+The scheduler is a long-lived process, installed as a launchd **user agent** (not a
+system daemon — WhatsApp Web needs a real logged-in GUI session).
+
+```bash
+git clone <this repo> ~/parfi-fundraising && cd ~/parfi-fundraising
+npm install
+cp .env.example .env      # fill in ANTHROPIC_API_KEY, NOTION_*, WHATSAPP_CONTACT
+npm run db:migrate
+npm run seed
+npm run whatsapp:login    # scan the QR code once
+./deploy/install-macos.sh
+```
+
+Then stop the machine sleeping through a run:
+
+```bash
+sudo pmset -a sleep 0 disablesleep 1
+```
+
+Set the time with `RESEARCH_CRON` (default `30 7 * * *`) and `RESEARCH_TZ` (default
+`Asia/Kolkata`).
+
+**Runbook**
+
+| Task | Command |
+| --- | --- |
+| Status | `launchctl print gui/$UID/com.parfi.fundraising.scheduler \| head -20` |
+| Logs | `tail -f ~/parfi-fundraising/logs/scheduler.log` |
+| Stop | `launchctl bootout gui/$UID/com.parfi.fundraising.scheduler` |
+| Start | `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.parfi.fundraising.scheduler.plist` |
+| Update | `git pull && npm install && npm run db:migrate && ./deploy/install-macos.sh` |
+| Force a run now | `npm run research:now -- --notify` |
+
+The dashboard itself is separate from the scheduler. To keep it up too, run
+`npm run build && npm run start` (add a second launchd agent if you want it to
+survive reboots).
+
+**If the morning message doesn't arrive:** check `logs/scheduler.error.log` first.
+The usual causes are an expired WhatsApp Web session (re-run `npm run whatsapp:login`)
+or a `WHATSAPP_CONTACT` that no longer matches the chat name. A research failure and
+a delivery failure are recorded separately — prospects found are always saved even
+when the message fails, so nothing is lost and you can resend.
+
+### Triggering from elsewhere
+
+`POST /api/jobs/daily-research` runs the same job. Set `CRON_SECRET` and send it as
+the `x-cron-secret` header; the endpoint bypasses `APP_PASSWORD` so an external
+scheduler can reach it.
+
+```bash
+curl -X POST http://localhost:3000/api/jobs/daily-research \
+  -H "Content-Type: application/json" -H "x-cron-secret: $CRON_SECRET" \
+  -d '{"notify": true}'
+```
+
 ## Adding to the research tab
 
 Use **Add company** in the UI, or edit `prisma/seed.ts` and re-run `npm run seed`
@@ -76,7 +186,8 @@ is a self-implementer and rank it accordingly.
 ## Stack
 
 Next.js 16 (App Router) · TypeScript · Tailwind · Prisma 7 + SQLite · Notion API
-`2025-09-03` via `@notionhq/client` v5.
+`2025-09-03` via `@notionhq/client` v5 · Claude Opus 5 with server-side web search ·
+Playwright · node-cron.
 
 Notes for anyone extending this:
 

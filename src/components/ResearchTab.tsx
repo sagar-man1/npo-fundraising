@@ -5,17 +5,25 @@ import { useRouter } from "next/navigation";
 import { Badge, deliveryTone, likelihoodTone, priorityTone } from "./Badge";
 import { AddCompanyForm } from "./AddCompanyForm";
 import { DELIVERY_MODELS, DELIVERY_MODEL_HELP } from "@/lib/deliveryModels";
-import { THEME_LABELS } from "@/lib/format";
-import type { ResearchCompanyRow } from "@/lib/types";
+import { formatRelative, THEME_LABELS } from "@/lib/format";
+import type { JobRunRow, ResearchCompanyRow } from "@/lib/types";
 
 const STATUSES = ["New", "Reviewing", "Approved", "Rejected", "Pushed to Notion"];
+
+function isFresh(company: ResearchCompanyRow) {
+  if (company.discoveredBy !== "agent") return false;
+  const age = Date.now() - new Date(company.createdAt).getTime();
+  return age < 36 * 60 * 60 * 1000;
+}
 
 export function ResearchTab({
   companies,
   notionConfigured,
+  lastJob,
 }: {
   companies: ResearchCompanyRow[];
   notionConfigured: boolean;
+  lastJob: JobRunRow | null;
 }) {
   const [query, setQuery] = useState("");
   const [modelFilter, setModelFilter] = useState("Grant-maker");
@@ -42,9 +50,11 @@ export function ResearchTab({
   }, [companies, query, modelFilter]);
 
   const leadCount = companies.reduce((total, company) => total + company.leads.length, 0);
+  const freshCount = companies.filter(isFresh).length;
 
   return (
     <div className="space-y-4">
+      <DailyResearchBar lastJob={lastJob} freshCount={freshCount} />
       <div className="flex flex-wrap items-center gap-3">
         <input
           value={query}
@@ -94,6 +104,98 @@ export function ResearchTab({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function DailyResearchBar({
+  lastJob,
+  freshCount,
+}: {
+  lastJob: JobRunRow | null;
+  freshCount: number;
+}) {
+  const router = useRouter();
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function runNow(notify: boolean) {
+    setRunning(true);
+    setError(null);
+    setResult(null);
+
+    const response = await fetch("/api/jobs/daily-research", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ notify }),
+    });
+    const data = await response.json().catch(() => ({}));
+    setRunning(false);
+
+    if (response.ok) {
+      setResult(
+        data.found
+          ? `Found ${data.found}: ${(data.companies ?? []).join(", ")}${
+              data.deliveryError ? ` — WhatsApp failed: ${data.deliveryError}` : ""
+            }`
+          : "No new prospects cleared the bar this run.",
+      );
+      router.refresh();
+    } else {
+      setError(data.error ?? "Research run failed");
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium text-slate-900 dark:text-slate-100">
+            Daily research
+          </p>
+          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+            {lastJob
+              ? `Last run ${formatRelative(lastJob.finishedAt)} · ${lastJob.summary ?? lastJob.status}${
+                  lastJob.notified ? " · WhatsApp sent" : ""
+                }`
+              : "Not run yet. The scheduler runs it every morning; you can also trigger it here."}
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => runNow(false)}
+            disabled={running}
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 disabled:opacity-50 dark:border-slate-700 dark:text-slate-200"
+          >
+            {running ? "Researching…" : "Run research now"}
+          </button>
+          <button
+            onClick={() => runNow(true)}
+            disabled={running}
+            title="Runs research and sends the WhatsApp message"
+            className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900"
+          >
+            Run + WhatsApp
+          </button>
+        </div>
+      </div>
+
+      {freshCount > 0 && (
+        <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-400">
+          {freshCount} new from the last run — marked <strong>New</strong> below.
+        </p>
+      )}
+      {result && (
+        <p className="mt-2 text-sm text-slate-700 dark:text-slate-300">{result}</p>
+      )}
+      {lastJob?.error && !error && (
+        <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">
+          Last run reported: {lastJob.error}
+        </p>
+      )}
+      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
     </div>
   );
 }
@@ -148,6 +250,7 @@ function CompanyCard({
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
+          {isFresh(company) && <Badge tone="green">New</Badge>}
           <Badge tone={priorityTone(company.priority)}>{company.priority}</Badge>
           <Badge
             tone={deliveryTone(company.deliveryModel)}

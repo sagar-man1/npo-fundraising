@@ -2,12 +2,12 @@ import { Dashboard } from "@/components/Dashboard";
 import { prisma } from "@/lib/db";
 import { parseJsonArray } from "@/lib/format";
 import { configuredSources } from "@/lib/notion";
-import type { ProspectRow, ResearchCompanyRow } from "@/lib/types";
+import type { JobRunRow, ProspectRow, ResearchCompanyRow } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
-  const [prospects, companies, lastSync] = await Promise.all([
+  const [prospects, companies, lastSync, lastJob] = await Promise.all([
     prisma.prospect.findMany({
       include: { assessment: true },
       orderBy: [{ source: "asc" }, { name: "asc" }],
@@ -18,6 +18,10 @@ export default async function Home() {
     }),
     prisma.syncRun.findFirst({
       where: { status: "success" },
+      orderBy: { finishedAt: "desc" },
+    }),
+    prisma.jobRun.findFirst({
+      where: { job: "daily-research", NOT: { finishedAt: null } },
       orderBy: { finishedAt: "desc" },
     }),
   ]);
@@ -61,6 +65,8 @@ export default async function Home() {
     sourceUrls: parseJsonArray(company.sourceUrls),
     notes: company.notes,
     notionPageUrl: company.notionPageUrl,
+    discoveredBy: company.discoveredBy,
+    createdAt: company.createdAt.toISOString(),
     leads: company.leads.map((lead) => ({
       id: lead.id,
       name: lead.name,
@@ -75,12 +81,24 @@ export default async function Home() {
     })),
   }));
 
+  const lastJobRow: JobRunRow | null = lastJob
+    ? {
+        status: lastJob.status,
+        found: lastJob.found,
+        notified: lastJob.notified,
+        summary: lastJob.summary,
+        error: lastJob.error,
+        finishedAt: lastJob.finishedAt?.toISOString() ?? null,
+      }
+    : null;
+
   return (
     <Dashboard
       prospects={prospectRows}
       companies={companyRows}
       lastSyncAt={lastSync?.finishedAt?.toISOString() ?? null}
       notionConfigured={configuredSources().length > 0}
+      lastJob={lastJobRow}
     />
   );
 }

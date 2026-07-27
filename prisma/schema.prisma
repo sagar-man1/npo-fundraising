@@ -87,6 +87,11 @@ model ResearchCompany {
 
   notionPageUrl String? // set once pushed into the Notion pipeline
 
+  /// "seed" | "manual" | "agent" — where the row came from.
+  discoveredBy String    @default("manual")
+  /// Set once this company has gone out in a morning WhatsApp message.
+  notifiedAt   DateTime?
+
   createdAt DateTime       @default(now())
   updatedAt DateTime       @updatedAt
   leads     ResearchLead[]
@@ -119,6 +124,23 @@ model ResearchLead {
   updatedAt DateTime @updatedAt
 
   @@index([companyId])
+}
+
+/// Audit trail for the scheduled daily research job.
+model JobRun {
+  id     String @id @default(cuid())
+  job    String // "daily-research"
+  status String // "running" | "success" | "error"
+
+  found    Int     @default(0)
+  notified Boolean @default(false)
+  summary  String?
+  error    String?
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  @@index([job, startedAt])
 }
 
 /// Audit trail for Notion pulls, so the UI can show when data was last refreshed.

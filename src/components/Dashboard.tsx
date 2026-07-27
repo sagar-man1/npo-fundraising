@@ -4,7 +4,7 @@ import { useState } from "react";
 import { CurrentLeads } from "./CurrentLeads";
 import { ResearchTab } from "./ResearchTab";
 import { formatRelative } from "@/lib/format";
-import type { ProspectRow, ResearchCompanyRow } from "@/lib/types";
+import type { JobRunRow, ProspectRow, ResearchCompanyRow } from "@/lib/types";
 
 type Tab = "current" | "research";
 
@@ -13,11 +13,13 @@ export function Dashboard({
   companies,
   lastSyncAt,
   notionConfigured,
+  lastJob,
 }: {
   prospects: ProspectRow[];
   companies: ResearchCompanyRow[];
   lastSyncAt: string | null;
   notionConfigured: boolean;
+  lastJob: JobRunRow | null;
 }) {
   const [tab, setTab] = useState<Tab>("current");
 
@@ -65,7 +67,11 @@ export function Dashboard({
             lastSyncLabel={formatRelative(lastSyncAt)}
           />
         ) : (
-          <ResearchTab companies={companies} notionConfigured={notionConfigured} />
+          <ResearchTab
+            companies={companies}
+            notionConfigured={notionConfigured}
+            lastJob={lastJob}
+          />
         )}
       </main>
     </div>

@@ -10,6 +10,12 @@ export function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // Job endpoints carry their own shared secret so an external scheduler can
+  // reach them without a browser session.
+  if (pathname.startsWith("/api/jobs/")) {
+    return NextResponse.next();
+  }
+
   if (isValidSession(request.cookies.get(SESSION_COOKIE)?.value)) {
     return NextResponse.next();
   }
