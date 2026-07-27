@@ -7,9 +7,10 @@ A working dashboard for the PanIIT Alumni Foundation fundraising team. Two tabs:
 - **Research** — net-new companies and named people to approach, kept in a local
   database so the team can edit, triage and promote them into Notion.
 
-Every morning a scheduled job researches fresh prospects and sends them to WhatsApp.
-It runs as its own always-on service, so it does not depend on anyone's laptop being
-awake — see [Running it every morning](#running-it-every-morning).
+Every morning a scheduled **Claude Routine** researches fresh prospects and writes
+them into Notion; the app syncs them into the Research tab and WhatsApps you a
+digest. Nothing depends on your laptop being awake — see
+[Running it every morning](#running-it-every-morning).
 
 ## The one idea the ranking is built on
 
@@ -30,18 +31,36 @@ rows synced from Notion inherit a starting assessment automatically (see
 `src/lib/deliveryModels.ts`), which anyone can override in the UI. Overrides are
 stored locally — Notion stays the system of record for stage, owner and next action.
 
-## Setup
+## Seeing the dashboard
+
+There is no hosted URL — the app runs on your machine. One command:
+
+```bash
+./start.sh
+```
+
+That installs dependencies, creates the database, loads the seed data, starts the
+server, and opens <http://localhost:3000>. Re-running it is safe; it skips whatever
+is already done. Stop it with Ctrl+C.
+
+Or the same thing by hand:
 
 ```bash
 npm install
-cp .env.example .env      # then fill in the values below
-npm run db:migrate        # create the SQLite database
-npm run seed              # load the researched companies and leads
-npm run dev               # http://localhost:3000
+cp .env.example .env
+npm run db:migrate
+npm run seed
+npm run dev
 ```
 
-The Research tab works immediately after seeding. Current leads stays empty until
-Notion is connected.
+**What you should see:** the **Research** tab, populated with ~18 companies, filtered
+to grant-makers. Switch the dropdown to *Self-implementer* to see the deliberate
+passes. **Current leads** will be empty with a "Notion is not connected" banner —
+that's correct until you add your Notion token.
+
+To reach it from another device on your network (e.g. the dashboard running on the
+Mac mini, viewed from your laptop), start it with `npm run dev -- -H 0.0.0.0` and
+visit `http://<mac-mini-ip>:3000`. Set `APP_PASSWORD` before you do that.
 
 ### Connecting Notion
 
@@ -75,23 +94,40 @@ auth is skipped entirely, which is what you want for local use.
 Three pieces: a **research agent** that finds prospects, a **WhatsApp sender** that
 delivers them, and a **scheduler** that fires the pair daily.
 
-### 1. Research agent
+### 1. Research — in Claude Code, writing to Notion
 
-Set `ANTHROPIC_API_KEY` in `.env`. Each run searches the web, applies the
-grant-maker screen above, drops anything already in the pipeline, and writes what
-survives into the Research tab flagged **New**.
+The research does **not** run in this app and needs no Anthropic API key here. A
+scheduled **Claude Routine** does it and writes into the *Research Pipeline (auto)*
+database in Notion; the app syncs that database like any other.
 
-The brief rotates by weekday (GCCs, pharma, BFSI, manufacturing, FMCG, family
-foundations, PSUs) so a week of runs covers ground instead of retreading one sector.
-It is told to return fewer prospects rather than pad with speculative ones, so a
-morning with nothing new is a valid result, not a failure.
+```
+Claude Routine (daily)  →  Notion: Research Pipeline (auto)  →  app sync  →  Research tab  →  WhatsApp
+```
 
-Try it before scheduling anything:
+Set it up once — full instructions and the exact prompt to paste are in
+**[docs/daily-research-routine.md](docs/daily-research-routine.md)**. It must be
+created from the **claude.ai Routines UI** so the Notion connector can be attached;
+a Routine created from a Claude Code session cannot inherit that connector and would
+run every morning writing nothing.
+
+The Notion database already exists:
+[Research Pipeline (auto)](https://app.notion.com/p/e4e183d73e454d03a8594029768b33b9),
+and its ID is pre-filled as `NOTION_RESEARCH_DB_ID` in `.env.example`. Share it with
+your Notion integration the same way as the other two databases.
+
+<details>
+<summary>Alternative: research inside the app with an Anthropic key</summary>
+
+If you would rather not use a Routine, set `ANTHROPIC_API_KEY` and leave
+`NOTION_RESEARCH_DB_ID` empty. The app then does the research itself:
 
 ```bash
 npm run research:now              # research only, no message
 npm run research:now -- --notify  # research and send the WhatsApp message
 ```
+
+The scheduler picks whichever mode is configured, preferring the Notion pipeline.
+</details>
 
 ### 2. WhatsApp
 

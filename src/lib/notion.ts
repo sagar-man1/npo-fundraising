@@ -15,6 +15,13 @@ const ENV_BY_SOURCE: Record<SourceKey, string> = {
   companies: "NOTION_COMPANIES_DB_ID",
 };
 
+/** Notion multi-select labels to the theme keys the UI uses. */
+const THEME_KEYS: Record<string, string> = {
+  "vocational education": "vocational",
+  "women empowerment": "women",
+  livelihood: "livelihood",
+};
+
 export class NotionConfigError extends Error {}
 
 function getClient() {
@@ -210,9 +217,127 @@ export async function syncSource(source: SourceKey) {
   }
 }
 
+function readUrl(props: Props, names: string[]) {
+  const prop = findProp(props, names);
+  if (prop?.type === "url") return prop.url;
+  return null;
+}
+
+function readThemes(props: Props, names: string[]) {
+  const prop = findProp(props, names);
+  if (prop?.type !== "multi_select") return "[]";
+  const keys = prop.multi_select
+    .map((option) => THEME_KEYS[option.name.toLowerCase()])
+    .filter(Boolean);
+  return JSON.stringify(keys);
+}
+
+/**
+ * Notion holds named leads as free text, one per line. Split on the first dash
+ * so the UI has a name to show, and keep the remainder as the title.
+ */
+function parseLeads(text: string | null) {
+  if (!text) return [];
+  return text
+    .split("\n")
+    .map((line) => line.replace(/^[•\-*]\s*/, "").trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [name, ...rest] = line.split(/\s+[—–-]\s+/);
+      return { name: name.trim(), title: rest.join(" — ").trim() || null };
+    })
+    .filter((lead) => lead.name);
+}
+
+/**
+ * Pulls the Research Pipeline database — the one the scheduled Claude Code
+ * routine writes into — so agent findings show up in the Research tab without
+ * the app needing an Anthropic key of its own.
+ */
+export async function syncResearchPipeline() {
+  const databaseId = process.env.NOTION_RESEARCH_DB_ID;
+  if (!databaseId) {
+    throw new NotionConfigError(
+      "NOTION_RESEARCH_DB_ID is not set. Copy the Research Pipeline database ID out of its Notion URL and add it to .env.",
+    );
+  }
+
+  const run = await prisma.syncRun.create({
+    data: { source: "research", status: "running" },
+  });
+
+  try {
+    const client = getClient();
+    const dataSourceId = await resolveDataSourceId(client, databaseId);
+    const pages = await queryAllPages(client, dataSourceId);
+
+    for (const page of pages) {
+      const props = page.properties;
+      const name = readTitle(props);
+      if (!name) continue;
+
+      const leadsText = readText(props, ["Named Leads"]);
+      const sourceUrl = readUrl(props, ["Sources"]);
+
+      const data = {
+        name,
+        sector: readText(props, ["Sector"]) ?? "Unknown",
+        hqCity: readText(props, ["HQ City"]),
+        csrBudget: readText(props, ["CSR Budget"]),
+        csrFocus: readText(props, ["CSR Focus"]),
+        themes: readThemes(props, ["Themes"]),
+        deliveryModel: readSelect(props, ["Funding Model"]) ?? "Unknown",
+        grantLikelihood: readSelect(props, ["Grant Odds"]) ?? "Medium",
+        externalGrantEvidence: readText(props, ["Evidence It Funds Outsiders"]),
+        iitConnect: readText(props, ["IIT Connection"]),
+        warmPath: readText(props, ["Warm Path"]),
+        fitRationale: readText(props, ["Why It Fits"]),
+        priority: readSelect(props, ["Priority"]) ?? "Tier 3",
+        status: readSelect(props, ["Review Status"]) ?? "New",
+        sourceUrls: JSON.stringify(sourceUrl ? [sourceUrl] : []),
+        notionPageUrl: page.url,
+        discoveredBy: "notion",
+      };
+
+      const existing = await prisma.researchCompany.findUnique({ where: { name } });
+      const company = existing
+        ? await prisma.researchCompany.update({ where: { name }, data })
+        : await prisma.researchCompany.create({ data });
+
+      // Leads are rebuilt from the Notion text each sync — Notion is the source
+      // of truth for this database, so a removed line should disappear here too.
+      const leads = parseLeads(leadsText);
+      if (leads.length) {
+        await prisma.researchLead.deleteMany({ where: { companyId: company.id } });
+        await prisma.researchLead.createMany({
+          data: leads.map((lead) => ({ ...lead, companyId: company.id })),
+        });
+      }
+    }
+
+    await prisma.syncRun.update({
+      where: { id: run.id },
+      data: { status: "success", recordsIn: pages.length, finishedAt: new Date() },
+    });
+
+    return { source: "research" as const, count: pages.length };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await prisma.syncRun.update({
+      where: { id: run.id },
+      data: { status: "error", error: message, finishedAt: new Date() },
+    });
+    throw error;
+  }
+}
+
+export function researchPipelineConfigured() {
+  return !!process.env.NOTION_TOKEN && !!process.env.NOTION_RESEARCH_DB_ID;
+}
+
 export async function syncAll() {
   const sources = configuredSources();
-  if (!sources.length) {
+  if (!sources.length && !researchPipelineConfigured()) {
     throw new NotionConfigError(
       "No Notion databases are configured. Set NOTION_TOKEN plus NOTION_PIPELINE_DB_ID and/or NOTION_COMPANIES_DB_ID in .env.",
     );
@@ -221,6 +346,9 @@ export async function syncAll() {
   const results = [];
   for (const source of sources) {
     results.push(await syncSource(source));
+  }
+  if (researchPipelineConfigured()) {
+    results.push(await syncResearchPipeline());
   }
   return results;
 }

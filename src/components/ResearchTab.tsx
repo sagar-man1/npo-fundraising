@@ -11,7 +11,7 @@ import type { JobRunRow, ResearchCompanyRow } from "@/lib/types";
 const STATUSES = ["New", "Reviewing", "Approved", "Rejected", "Pushed to Notion"];
 
 function isFresh(company: ResearchCompanyRow) {
-  if (company.discoveredBy !== "agent") return false;
+  if (!["agent", "notion"].includes(company.discoveredBy)) return false;
   const age = Date.now() - new Date(company.createdAt).getTime();
   return age < 36 * 60 * 60 * 1000;
 }
