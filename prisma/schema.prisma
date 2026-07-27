@@ -1,0 +1,155 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+/// A row pulled from one of the Notion trackers. Read-only mirror: edits belong in Notion.
+model Prospect {
+  id       String @id @default(cuid())
+  notionId String @unique
+
+  /// Which Notion tracker this came from: "pipeline" or "companies".
+  source String
+  name   String
+
+  stage            String?
+  sector           String?
+  status           String?
+  connectionStatus String?
+  programs         String? // JSON array of program tags
+  notes            String?
+  keyContacts      String?
+  nextAction       String?
+  nextActionDate   DateTime?
+
+  notionUrl    String?
+  lastEditedAt DateTime?
+  syncedAt     DateTime  @default(now())
+
+  assessment ProspectAssessment?
+
+  @@index([source])
+}
+
+/// Local overlay on a synced Notion row. Holds judgement PARFI adds on top of
+/// the tracker — chiefly whether the company grants to outside NGOs or spends
+/// its CSR running its own institutes.
+model ProspectAssessment {
+  id       String   @id @default(cuid())
+  notionId String   @unique
+  prospect Prospect @relation(fields: [notionId], references: [notionId], onDelete: Cascade)
+
+  /// "Grant-maker" | "Mixed" | "Self-implementer" | "Unknown"
+  deliveryModel String @default("Unknown")
+  /// "High" | "Medium" | "Low"
+  grantLikelihood String @default("Medium")
+  rationale       String?
+
+  pushedToNotionAt DateTime?
+  updatedAt        DateTime  @updatedAt
+}
+
+/// A net-new company surfaced by research, not yet in the Notion trackers.
+model ResearchCompany {
+  id     String @id @default(cuid())
+  name   String @unique
+  sector String
+
+  hqCity       String?
+  csrBudget    String?
+  csrFocus     String?
+  /// Which PARFI themes it funds: JSON array of "vocational" | "women" | "livelihood".
+  themes       String  @default("[]")
+  iitConnect   String?
+  warmPath     String?
+  fitRationale String?
+
+  /// How the company spends its CSR. Self-implementers run their own institutes
+  /// and rarely fund an outside NGO, so they rank below their budget.
+  /// "Grant-maker" | "Mixed" | "Self-implementer" | "Unknown"
+  deliveryModel String @default("Unknown")
+  /// "High" | "Medium" | "Low" — chance of funding an external partner like PARFI.
+  grantLikelihood String @default("Medium")
+  /// Evidence that it has funded outside NGOs before.
+  externalGrantEvidence String?
+
+  /// "Tier 1" | "Tier 2" | "Tier 3"
+  priority String @default("Tier 3")
+  /// "New" | "Reviewing" | "Approved" | "Rejected" | "Pushed to Notion"
+  status   String @default("New")
+
+  sourceUrls String? // JSON array of reference links
+  notes      String?
+
+  notionPageUrl String? // set once pushed into the Notion pipeline
+
+  /// "seed" | "manual" | "agent" — where the row came from.
+  discoveredBy String    @default("manual")
+  /// Set once this company has gone out in a morning WhatsApp message.
+  notifiedAt   DateTime?
+
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  leads     ResearchLead[]
+
+  @@index([sector])
+  @@index([status])
+}
+
+/// A named person at a research company — who to actually reach.
+model ResearchLead {
+  id        String          @id @default(cuid())
+  companyId String
+  company   ResearchCompany @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  name  String
+  title String?
+  /// "Decision maker" | "CSR lead" | "Alumni connector" | "Influencer"
+  role  String?
+
+  iitAffiliation String?
+  linkedinUrl    String?
+  email          String?
+  warmPath       String?
+  notes          String?
+
+  /// "New" | "Verified" | "Contacted" | "Dropped"
+  status String @default("New")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+}
+
+/// Audit trail for the scheduled daily research job.
+model JobRun {
+  id     String @id @default(cuid())
+  job    String // "daily-research"
+  status String // "running" | "success" | "error"
+
+  found    Int     @default(0)
+  notified Boolean @default(false)
+  summary  String?
+  error    String?
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  @@index([job, startedAt])
+}
+
+/// Audit trail for Notion pulls, so the UI can show when data was last refreshed.
+model SyncRun {
+  id         String    @id @default(cuid())
+  source     String
+  status     String // "success" | "error"
+  recordsIn  Int       @default(0)
+  error      String?
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+}

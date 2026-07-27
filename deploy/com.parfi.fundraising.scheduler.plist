@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd service for the daily research scheduler.
+  Install with: ./deploy/install-macos.sh
+  The __APP_DIR__ / __USER__ placeholders are filled in by that script.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.parfi.fundraising.scheduler</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__APP_DIR__/deploy/run-scheduler.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__APP_DIR__</string>
+
+    <!-- Start at login and keep it running; launchd restarts it if it dies. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>__APP_DIR__/logs/scheduler.log</string>
+    <key>StandardErrorPath</key>
+    <string>__APP_DIR__/logs/scheduler.error.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>NODE_ENV</key>
+        <string>production</string>
+    </dict>
+
+    <!-- WhatsApp Web needs a real GUI session, so this is a user agent
+         (~/Library/LaunchAgents), not a system daemon. -->
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>
