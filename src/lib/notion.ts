@@ -3,17 +3,35 @@ import type { PageObjectResponse } from "@notionhq/client";
 import { prisma } from "./db";
 import { lookupAssessment } from "./deliveryModels";
 
-export type SourceKey = "pipeline" | "companies";
+export type SourceKey = "pipeline" | "companies" | "donors";
 
 export const SOURCE_LABELS: Record<SourceKey, string> = {
   pipeline: "CSR Pipeline Tracker",
   companies: "IT/ITeS Companies Tracker",
+  donors: "Donor CRM",
 };
 
 const ENV_BY_SOURCE: Record<SourceKey, string> = {
   pipeline: "NOTION_PIPELINE_DB_ID",
   companies: "NOTION_COMPANIES_DB_ID",
+  donors: "NOTION_DONORS_DB_ID",
 };
+
+/** Notion's Flag option labels to the short keys the app stores. */
+const FLAG_TO_KEY: Record<string, string> = {
+  "⭐ starred": "starred",
+  "✅ existing donor": "donor",
+  "🚫 not relevant": "not-relevant",
+};
+
+export const FLAG_TO_NOTION: Record<string, string> = {
+  starred: "⭐ Starred",
+  donor: "✅ Existing Donor",
+  "not-relevant": "🚫 Not Relevant",
+};
+
+/** Property names that hold free-text notes, in the order we prefer them. */
+const NOTE_PROPS = ["Notes", "Comments/Notes", "Notes & Key Contacts"];
 
 /** Notion multi-select labels to the theme keys the UI uses. */
 const THEME_KEYS: Record<string, string> = {
@@ -146,9 +164,18 @@ function mapPage(page: PageObjectResponse, source: SourceKey) {
     connectionStatus: readSelect(props, ["Connection Status"]),
     programs: readMultiSelect(props, ["Program", "Programs"]),
     notes: readText(props, ["Notes", "Comments/Notes"]),
-    keyContacts: readText(props, ["Notes & Key Contacts", "Key Contacts"]),
+    keyContacts: readText(props, ["Notes & Key Contacts", "Key Contacts", "Key Contact"]),
     nextAction: readText(props, ["Next Action"]),
-    nextActionDate: readDate(props, ["Next Action Date"]),
+    nextActionDate: readDate(props, ["Next Action Date", "Next Touch Date"]),
+    owner: readSelect(props, ["Account Owner", "Owner"]),
+    contactDetails: readText(props, ["Contact Details"]),
+    pitchAngle: readText(props, ["Pitch Angle"]),
+    routeIn: readText(props, ["Route In"]),
+    boardConnection: readText(props, ["Board Connection"]),
+    csrBudget: readSelect(props, ["CSR Budget"]) ?? readText(props, ["CSR Budget"]),
+    priority: readSelect(props, ["Priority"]),
+    lastTouch: readDate(props, ["Last Touch"]),
+    flag: FLAG_TO_KEY[(readSelect(props, ["Flag"]) ?? "").toLowerCase()] ?? null,
     notionUrl: page.url,
     lastEditedAt: new Date(page.last_edited_time),
     syncedAt: new Date(),
@@ -215,6 +242,79 @@ export async function syncSource(source: SourceKey) {
     });
     throw error;
   }
+}
+
+/**
+ * Writes the Flag select back to the row's Notion page, then mirrors it
+ * locally so the UI updates without waiting for the next sync.
+ */
+export async function setProspectFlag(notionId: string, flag: string | null) {
+  const client = getClient();
+  const label = flag ? FLAG_TO_NOTION[flag] : null;
+  if (flag && !label) throw new Error(`Unknown flag "${flag}"`);
+
+  await client.pages.update({
+    page_id: notionId,
+    properties: { Flag: { select: label ? { name: label } : null } } as never,
+  });
+
+  await prisma.prospect.update({ where: { notionId }, data: { flag } });
+}
+
+/** Finds whichever notes-ish rich_text property this database actually has. */
+function notesPropertyName(props: Props) {
+  for (const name of NOTE_PROPS) {
+    if (props[name]?.type === "rich_text") return name;
+  }
+  return null;
+}
+
+/** Notes are written straight back to Notion so the team sees them there too. */
+export async function setProspectNotes(notionId: string, text: string) {
+  const client = getClient();
+  const page = await client.pages.retrieve({ page_id: notionId });
+  if (!("properties" in page)) throw new Error("Could not read that Notion page");
+
+  const property = notesPropertyName(page.properties);
+  if (!property) {
+    throw new Error("That Notion database has no notes property to write into.");
+  }
+
+  await client.pages.update({
+    page_id: notionId,
+    properties: {
+      [property]: { rich_text: [{ text: { content: text.slice(0, 1900) } }] },
+    } as never,
+  });
+
+  await prisma.prospect.update({ where: { notionId }, data: { notes: text || null } });
+}
+
+/**
+ * Research rows that came from Notion push their notes back; locally-added ones
+ * just save to the database.
+ */
+export async function setResearchNotes(companyId: string, text: string) {
+  const company = await prisma.researchCompany.findUnique({ where: { id: companyId } });
+  if (!company) throw new Error("Research company not found");
+
+  if (company.notionPageUrl && process.env.NOTION_TOKEN) {
+    const pageId = company.notionPageUrl.split("/").pop()?.split("-").pop();
+    if (pageId) {
+      const client = getClient();
+      await client.pages.update({
+        page_id: pageId,
+        properties: {
+          Notes: { rich_text: [{ text: { content: text.slice(0, 1900) } }] },
+        } as never,
+      });
+    }
+  }
+
+  return prisma.researchCompany.update({
+    where: { id: companyId },
+    data: { notes: text || null },
+  });
 }
 
 function readUrl(props: Props, names: string[]) {
@@ -295,6 +395,7 @@ export async function syncResearchPipeline() {
         priority: readSelect(props, ["Priority"]) ?? "Tier 3",
         status: readSelect(props, ["Review Status"]) ?? "New",
         sourceUrls: JSON.stringify(sourceUrl ? [sourceUrl] : []),
+        notes: readText(props, ["Notes"]),
         notionPageUrl: page.url,
         discoveredBy: "notion",
       };

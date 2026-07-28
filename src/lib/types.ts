@@ -13,6 +13,15 @@ export type ProspectRow = {
   nextAction: string | null;
   nextActionDate: string | null;
   notionUrl: string | null;
+  owner: string | null;
+  contactDetails: string | null;
+  pitchAngle: string | null;
+  routeIn: string | null;
+  boardConnection: string | null;
+  csrBudget: string | null;
+  priority: string | null;
+  lastTouch: string | null;
+  flag: string | null;
   deliveryModel: string;
   grantLikelihood: string;
   rationale: string | null;

@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { DELIVERY_MODELS, GRANT_LIKELIHOODS } from "@/lib/deliveryModels";
+import { setResearchNotes } from "@/lib/notion";
 
 const PRIORITIES = ["Tier 1", "Tier 2", "Tier 3"];
 const STATUSES = ["New", "Reviewing", "Approved", "Rejected", "Pushed to Notion"];
@@ -53,8 +54,23 @@ export async function PATCH(request: Request, ctx: RouteContext<"/api/research/[
     }
   }
 
+  // Notes go back to Notion when the row came from there, so handle separately.
+  if (typeof body.notes === "string") {
+    delete data.notes;
+    try {
+      await setResearchNotes(id, body.notes);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not save notes";
+      return Response.json({ error: message }, { status: 502 });
+    }
+  }
+
   if (!Object.keys(data).length) {
-    return Response.json({ error: "Nothing to update" }, { status: 400 });
+    const current = await prisma.researchCompany.findUnique({
+      where: { id },
+      include: { leads: true },
+    });
+    return Response.json(current);
   }
 
   const company = await prisma.researchCompany.update({

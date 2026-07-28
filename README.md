@@ -2,10 +2,23 @@
 
 A working dashboard for the PanIIT Alumni Foundation fundraising team. Two tabs:
 
-- **Current leads** — a live mirror of the Notion trackers (CSR Pipeline Tracker and
-  the IT/ITeS Companies tracker), pulled through the Notion API.
-- **Research** — net-new companies and named people to approach, kept in a local
-  database so the team can edit, triage and promote them into Notion.
+- **Current leads** — a live mirror of four Notion databases: the **Donor CRM**, the
+  **CSR Pipeline Tracker**, the **IT/ITeS Companies tracker**, and the **Research
+  Pipeline (auto)**.
+- **Research** — net-new companies and named people to approach, triaged here and
+  promoted into the pipeline in one click.
+
+Both tabs sort on every column, take notes inline (written straight back to Notion),
+and rank companies on whether they actually fund outside NGOs.
+
+### Triage
+
+Each row in Current leads has three buttons — **⭐ Star**, **✅ Existing donor**,
+**🚫 Not relevant** — which group the table into sections in that order, with
+untriaged rows in the middle. Clicking the active button again clears it. The choice
+is written to a **Flag** property in Notion, so it is visible to the whole team and
+survives a re-sync. On the Research tab, **→ Current leads** sits on the front of
+each card and creates the row in the CSR Pipeline Tracker.
 
 Every morning a scheduled **Claude Routine** researches fresh prospects and writes
 them into Notion; the app syncs them into the Research tab and WhatsApps you a
@@ -67,20 +80,20 @@ visit `http://<mac-mini-ip>:3000`. Set `APP_PASSWORD` before you do that.
 1. Create an internal integration at <https://www.notion.so/my-integrations> and copy
    the token (starts with `ntn_`) into `NOTION_TOKEN`.
 2. Open each database in Notion → **⋯ → Connections → Connect to** → your integration.
-   Do this for the **CSR Pipeline Tracker** and the **Companies** database inside the
-   *IT/ITeS Companies: Engagement Tracker* page. Without this step the API returns a
-   404 even though the token is valid.
-3. Copy each database ID out of its URL into `NOTION_PIPELINE_DB_ID` and
-   `NOTION_COMPANIES_DB_ID`. In
-   `notion.so/workspace/<32-character-id>?v=…` the ID is that 32-character string.
+   Do this for the **Donor CRM**, the **CSR Pipeline Tracker**, the **Companies**
+   database inside the *IT/ITeS Companies: Engagement Tracker* page, and **Research
+   Pipeline (auto)**. Without this step the API returns a 404 even though the token
+   is valid.
+3. The four database IDs are already filled in for you in `.env.example`.
 4. Restart `npm run dev` and press **Sync from Notion**.
 
 Sync is pull-only and safe to re-run: rows are matched on their Notion page ID,
 updated in place, and rows deleted in Notion are dropped from the local mirror.
 
-The one write path is the **Push to Notion pipeline** button on a research company,
-which creates a new row in the CSR Pipeline Tracker. Nothing is written to Notion
-unless someone clicks it.
+Three things write back to Notion, all of them only on a click: the **→ Current
+leads** button on a research card (creates a row in the CSR Pipeline Tracker), the
+**triage buttons** (set the Flag property), and the **notes box** (writes the Notes
+property). Everything else is pull-only.
 
 ### Optional password
 
@@ -113,7 +126,7 @@ run every morning writing nothing.
 The Notion database already exists:
 [Research Pipeline (auto)](https://app.notion.com/p/e4e183d73e454d03a8594029768b33b9),
 and its ID is pre-filled as `NOTION_RESEARCH_DB_ID` in `.env.example`. Share it with
-your Notion integration the same way as the other two databases.
+your Notion integration the same way as the other three databases.
 
 <details>
 <summary>Alternative: research inside the app with an Anthropic key</summary>
