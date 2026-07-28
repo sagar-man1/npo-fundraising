@@ -44,27 +44,30 @@ rows synced from Notion inherit a starting assessment automatically (see
 `src/lib/deliveryModels.ts`), which anyone can override in the UI. Overrides are
 stored locally — Notion stays the system of record for stage, owner and next action.
 
-## Seeing the dashboard
+## Running and updating it
 
-There is no hosted URL — the app runs on your machine. One command:
+There is no hosted URL — the app runs on your machine. One command does everything:
 
 ```bash
+cd ~/npo-fundraising
 ./start.sh
 ```
 
-That installs dependencies, creates the database, loads the seed data, starts the
-server, and opens <http://localhost:3000>. Re-running it is safe; it skips whatever
-is already done. Stop it with Ctrl+C.
+It pulls the latest code, installs anything new, updates the database, starts the
+server and opens <http://localhost:3000>. **This is also how you update** — there is
+no separate setup to redo when the code changes. Stop it with Ctrl+C.
 
-Or the same thing by hand:
+| Command | What it does |
+| --- | --- |
+| `./start.sh` | Update and run. The everyday command. |
+| `./start.sh --no-update` | Run without pulling — useful offline. |
+| `./update.sh` | Update without running. Use this on the Mac mini, where the scheduler runs headless; it restarts the scheduler for you. |
 
-```bash
-npm install
-cp .env.example .env
-npm run db:migrate
-npm run seed
-npm run dev
-```
+Both refuse to run if you have uncommitted local changes, rather than overwriting
+them, and both tell you what to do about it. If your branch has been merged and
+deleted on GitHub, `update.sh` notices and moves you to `main` automatically.
+
+The first run takes a few minutes; later ones are quick.
 
 **What you should see:** the **Research** tab, populated with ~18 companies, filtered
 to grant-makers. Switch the dropdown to *Self-implementer* to see the deliberate
@@ -198,7 +201,7 @@ Set the time with `RESEARCH_CRON` (default `30 7 * * *`) and `RESEARCH_TZ` (defa
 | Logs | `tail -f ~/parfi-fundraising/logs/scheduler.log` |
 | Stop | `launchctl bootout gui/$UID/com.parfi.fundraising.scheduler` |
 | Start | `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.parfi.fundraising.scheduler.plist` |
-| Update | `git pull && npm install && npm run db:migrate && ./deploy/install-macos.sh` |
+| Update | `./update.sh` (pulls, installs, migrates, restarts the scheduler) |
 | Force a run now | `npm run research:now -- --notify` |
 
 The dashboard itself is separate from the scheduler. To keep it up too, run

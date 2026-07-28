@@ -1,9 +1,18 @@
 #!/bin/bash
 # One command to get the dashboard running: ./start.sh
-# Safe to re-run — it skips whatever is already done.
+#
+# It pulls the latest code first, so this is also how you update. Safe to
+# re-run — it skips whatever is already done.
+#
+#   ./start.sh --no-update   start without pulling (useful offline)
 set -euo pipefail
 
 cd "$(dirname "$0")"
+
+SKIP_UPDATE=false
+for arg in "$@"; do
+  [ "$arg" = "--no-update" ] && SKIP_UPDATE=true
+done
 
 echo "PARFI Fundraising — starting up"
 echo
@@ -15,14 +24,41 @@ if [ ! -f .env ]; then
   echo
 fi
 
-if [ ! -d node_modules ]; then
+# ── Pull the latest code, unless told not to ─────────────────────────────────
+if [ "$SKIP_UPDATE" = false ] && [ -d .git ]; then
+  if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+    echo "Skipping the update — you have uncommitted local changes."
+    echo "Run ./update.sh to see them."
+    echo
+  elif git fetch --quiet origin 2>/dev/null; then
+    BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+    if git rev-parse --verify --quiet "origin/$BRANCH" >/dev/null; then
+      BEFORE="$(git rev-parse HEAD)"
+      git merge --quiet --ff-only "origin/$BRANCH" 2>/dev/null || true
+      if [ "$BEFORE" != "$(git rev-parse HEAD)" ]; then
+        echo "Pulled the latest code:"
+        git --no-pager log --oneline --no-decorate "$BEFORE..HEAD" | sed 's/^/  /'
+        echo
+      fi
+    fi
+  else
+    echo "Couldn't reach GitHub — starting with the code you already have."
+    echo
+  fi
+fi
+
+if [ ! -d node_modules ] || [ package.json -nt node_modules ]; then
   echo "Installing dependencies (a minute or two the first time)..."
   npm install
   echo
 fi
 
 echo "Setting up the database..."
-npm run db:migrate >/dev/null
+DBLOG="$(mktemp)"
+if ! npm run db:migrate >"$DBLOG" 2>&1; then
+  echo "Database setup failed:"; tail -20 "$DBLOG"; rm -f "$DBLOG"; exit 1
+fi
+rm -f "$DBLOG"
 npm run seed
 echo
 
