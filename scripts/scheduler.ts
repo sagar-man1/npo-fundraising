@@ -8,7 +8,11 @@
 
 import "dotenv/config";
 import cron from "node-cron";
-import { runDailyResearch } from "../src/lib/jobs/dailyResearch";
+import {
+  digestModeAvailable,
+  runDailyDigest,
+  runDailyResearch,
+} from "../src/lib/jobs/dailyResearch";
 
 const expression = process.env.RESEARCH_CRON ?? "30 7 * * *";
 const timezone = process.env.RESEARCH_TZ ?? "Asia/Kolkata";
@@ -30,10 +34,14 @@ async function tick(trigger: string) {
     return;
   }
   running = true;
-  log(`${trigger}: starting daily research`);
+
+  // Prefer the Notion pipeline: the research already happened in Claude Code,
+  // so this side just syncs and delivers — no Anthropic key needed.
+  const digest = digestModeAvailable();
+  log(`${trigger}: starting ${digest ? "daily digest (Notion)" : "in-app research"}`);
 
   try {
-    const result = await runDailyResearch();
+    const result = digest ? await runDailyDigest() : await runDailyResearch();
     log(`done — ${result.summary}`);
     if (result.deliveryError) log(`WhatsApp delivery failed: ${result.deliveryError}`);
     else if (result.notified) log("WhatsApp message sent");

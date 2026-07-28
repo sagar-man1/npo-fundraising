@@ -12,7 +12,7 @@ model Prospect {
   id       String @id @default(cuid())
   notionId String @unique
 
-  /// Which Notion tracker this came from: "pipeline" or "companies".
+  /// Which Notion tracker this came from: "pipeline", "companies" or "donors".
   source String
   name   String
 
@@ -25,6 +25,20 @@ model Prospect {
   keyContacts      String?
   nextAction       String?
   nextActionDate   DateTime?
+
+  // Extra columns carried by the Donor CRM.
+  owner           String?
+  contactDetails  String?
+  pitchAngle      String?
+  routeIn         String?
+  boardConnection String?
+  csrBudget       String?
+  priority        String?
+  lastTouch       DateTime?
+
+  /// "starred" | "donor" | "not-relevant" | null. Mirrors the Flag property in
+  /// Notion; the dashboard groups rows into sections by this.
+  flag String?
 
   notionUrl    String?
   lastEditedAt DateTime?

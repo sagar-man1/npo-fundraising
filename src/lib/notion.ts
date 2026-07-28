@@ -3,16 +3,41 @@ import type { PageObjectResponse } from "@notionhq/client";
 import { prisma } from "./db";
 import { lookupAssessment } from "./deliveryModels";
 
-export type SourceKey = "pipeline" | "companies";
+export type SourceKey = "pipeline" | "companies" | "donors";
 
 export const SOURCE_LABELS: Record<SourceKey, string> = {
   pipeline: "CSR Pipeline Tracker",
   companies: "IT/ITeS Companies Tracker",
+  donors: "Donor CRM",
 };
 
 const ENV_BY_SOURCE: Record<SourceKey, string> = {
   pipeline: "NOTION_PIPELINE_DB_ID",
   companies: "NOTION_COMPANIES_DB_ID",
+  donors: "NOTION_DONORS_DB_ID",
+};
+
+/** Notion's Flag option labels to the short keys the app stores. */
+const FLAG_TO_KEY: Record<string, string> = {
+  "⭐ starred": "starred",
+  "✅ existing donor": "donor",
+  "🚫 not relevant": "not-relevant",
+};
+
+export const FLAG_TO_NOTION: Record<string, string> = {
+  starred: "⭐ Starred",
+  donor: "✅ Existing Donor",
+  "not-relevant": "🚫 Not Relevant",
+};
+
+/** Property names that hold free-text notes, in the order we prefer them. */
+const NOTE_PROPS = ["Notes", "Comments/Notes", "Notes & Key Contacts"];
+
+/** Notion multi-select labels to the theme keys the UI uses. */
+const THEME_KEYS: Record<string, string> = {
+  "vocational education": "vocational",
+  "women empowerment": "women",
+  livelihood: "livelihood",
 };
 
 export class NotionConfigError extends Error {}
@@ -139,9 +164,18 @@ function mapPage(page: PageObjectResponse, source: SourceKey) {
     connectionStatus: readSelect(props, ["Connection Status"]),
     programs: readMultiSelect(props, ["Program", "Programs"]),
     notes: readText(props, ["Notes", "Comments/Notes"]),
-    keyContacts: readText(props, ["Notes & Key Contacts", "Key Contacts"]),
+    keyContacts: readText(props, ["Notes & Key Contacts", "Key Contacts", "Key Contact"]),
     nextAction: readText(props, ["Next Action"]),
-    nextActionDate: readDate(props, ["Next Action Date"]),
+    nextActionDate: readDate(props, ["Next Action Date", "Next Touch Date"]),
+    owner: readSelect(props, ["Account Owner", "Owner"]),
+    contactDetails: readText(props, ["Contact Details"]),
+    pitchAngle: readText(props, ["Pitch Angle"]),
+    routeIn: readText(props, ["Route In"]),
+    boardConnection: readText(props, ["Board Connection"]),
+    csrBudget: readSelect(props, ["CSR Budget"]) ?? readText(props, ["CSR Budget"]),
+    priority: readSelect(props, ["Priority"]),
+    lastTouch: readDate(props, ["Last Touch"]),
+    flag: FLAG_TO_KEY[(readSelect(props, ["Flag"]) ?? "").toLowerCase()] ?? null,
     notionUrl: page.url,
     lastEditedAt: new Date(page.last_edited_time),
     syncedAt: new Date(),
@@ -210,9 +244,201 @@ export async function syncSource(source: SourceKey) {
   }
 }
 
+/**
+ * Writes the Flag select back to the row's Notion page, then mirrors it
+ * locally so the UI updates without waiting for the next sync.
+ */
+export async function setProspectFlag(notionId: string, flag: string | null) {
+  const client = getClient();
+  const label = flag ? FLAG_TO_NOTION[flag] : null;
+  if (flag && !label) throw new Error(`Unknown flag "${flag}"`);
+
+  await client.pages.update({
+    page_id: notionId,
+    properties: { Flag: { select: label ? { name: label } : null } } as never,
+  });
+
+  await prisma.prospect.update({ where: { notionId }, data: { flag } });
+}
+
+/** Finds whichever notes-ish rich_text property this database actually has. */
+function notesPropertyName(props: Props) {
+  for (const name of NOTE_PROPS) {
+    if (props[name]?.type === "rich_text") return name;
+  }
+  return null;
+}
+
+/** Notes are written straight back to Notion so the team sees them there too. */
+export async function setProspectNotes(notionId: string, text: string) {
+  const client = getClient();
+  const page = await client.pages.retrieve({ page_id: notionId });
+  if (!("properties" in page)) throw new Error("Could not read that Notion page");
+
+  const property = notesPropertyName(page.properties);
+  if (!property) {
+    throw new Error("That Notion database has no notes property to write into.");
+  }
+
+  await client.pages.update({
+    page_id: notionId,
+    properties: {
+      [property]: { rich_text: [{ text: { content: text.slice(0, 1900) } }] },
+    } as never,
+  });
+
+  await prisma.prospect.update({ where: { notionId }, data: { notes: text || null } });
+}
+
+/**
+ * Research rows that came from Notion push their notes back; locally-added ones
+ * just save to the database.
+ */
+export async function setResearchNotes(companyId: string, text: string) {
+  const company = await prisma.researchCompany.findUnique({ where: { id: companyId } });
+  if (!company) throw new Error("Research company not found");
+
+  if (company.notionPageUrl && process.env.NOTION_TOKEN) {
+    const pageId = company.notionPageUrl.split("/").pop()?.split("-").pop();
+    if (pageId) {
+      const client = getClient();
+      await client.pages.update({
+        page_id: pageId,
+        properties: {
+          Notes: { rich_text: [{ text: { content: text.slice(0, 1900) } }] },
+        } as never,
+      });
+    }
+  }
+
+  return prisma.researchCompany.update({
+    where: { id: companyId },
+    data: { notes: text || null },
+  });
+}
+
+function readUrl(props: Props, names: string[]) {
+  const prop = findProp(props, names);
+  if (prop?.type === "url") return prop.url;
+  return null;
+}
+
+function readThemes(props: Props, names: string[]) {
+  const prop = findProp(props, names);
+  if (prop?.type !== "multi_select") return "[]";
+  const keys = prop.multi_select
+    .map((option) => THEME_KEYS[option.name.toLowerCase()])
+    .filter(Boolean);
+  return JSON.stringify(keys);
+}
+
+/**
+ * Notion holds named leads as free text, one per line. Split on the first dash
+ * so the UI has a name to show, and keep the remainder as the title.
+ */
+function parseLeads(text: string | null) {
+  if (!text) return [];
+  return text
+    .split("\n")
+    .map((line) => line.replace(/^[•\-*]\s*/, "").trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [name, ...rest] = line.split(/\s+[—–-]\s+/);
+      return { name: name.trim(), title: rest.join(" — ").trim() || null };
+    })
+    .filter((lead) => lead.name);
+}
+
+/**
+ * Pulls the Research Pipeline database — the one the scheduled Claude Code
+ * routine writes into — so agent findings show up in the Research tab without
+ * the app needing an Anthropic key of its own.
+ */
+export async function syncResearchPipeline() {
+  const databaseId = process.env.NOTION_RESEARCH_DB_ID;
+  if (!databaseId) {
+    throw new NotionConfigError(
+      "NOTION_RESEARCH_DB_ID is not set. Copy the Research Pipeline database ID out of its Notion URL and add it to .env.",
+    );
+  }
+
+  const run = await prisma.syncRun.create({
+    data: { source: "research", status: "running" },
+  });
+
+  try {
+    const client = getClient();
+    const dataSourceId = await resolveDataSourceId(client, databaseId);
+    const pages = await queryAllPages(client, dataSourceId);
+
+    for (const page of pages) {
+      const props = page.properties;
+      const name = readTitle(props);
+      if (!name) continue;
+
+      const leadsText = readText(props, ["Named Leads"]);
+      const sourceUrl = readUrl(props, ["Sources"]);
+
+      const data = {
+        name,
+        sector: readText(props, ["Sector"]) ?? "Unknown",
+        hqCity: readText(props, ["HQ City"]),
+        csrBudget: readText(props, ["CSR Budget"]),
+        csrFocus: readText(props, ["CSR Focus"]),
+        themes: readThemes(props, ["Themes"]),
+        deliveryModel: readSelect(props, ["Funding Model"]) ?? "Unknown",
+        grantLikelihood: readSelect(props, ["Grant Odds"]) ?? "Medium",
+        externalGrantEvidence: readText(props, ["Evidence It Funds Outsiders"]),
+        iitConnect: readText(props, ["IIT Connection"]),
+        warmPath: readText(props, ["Warm Path"]),
+        fitRationale: readText(props, ["Why It Fits"]),
+        priority: readSelect(props, ["Priority"]) ?? "Tier 3",
+        status: readSelect(props, ["Review Status"]) ?? "New",
+        sourceUrls: JSON.stringify(sourceUrl ? [sourceUrl] : []),
+        notes: readText(props, ["Notes"]),
+        notionPageUrl: page.url,
+        discoveredBy: "notion",
+      };
+
+      const existing = await prisma.researchCompany.findUnique({ where: { name } });
+      const company = existing
+        ? await prisma.researchCompany.update({ where: { name }, data })
+        : await prisma.researchCompany.create({ data });
+
+      // Leads are rebuilt from the Notion text each sync — Notion is the source
+      // of truth for this database, so a removed line should disappear here too.
+      const leads = parseLeads(leadsText);
+      if (leads.length) {
+        await prisma.researchLead.deleteMany({ where: { companyId: company.id } });
+        await prisma.researchLead.createMany({
+          data: leads.map((lead) => ({ ...lead, companyId: company.id })),
+        });
+      }
+    }
+
+    await prisma.syncRun.update({
+      where: { id: run.id },
+      data: { status: "success", recordsIn: pages.length, finishedAt: new Date() },
+    });
+
+    return { source: "research" as const, count: pages.length };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await prisma.syncRun.update({
+      where: { id: run.id },
+      data: { status: "error", error: message, finishedAt: new Date() },
+    });
+    throw error;
+  }
+}
+
+export function researchPipelineConfigured() {
+  return !!process.env.NOTION_TOKEN && !!process.env.NOTION_RESEARCH_DB_ID;
+}
+
 export async function syncAll() {
   const sources = configuredSources();
-  if (!sources.length) {
+  if (!sources.length && !researchPipelineConfigured()) {
     throw new NotionConfigError(
       "No Notion databases are configured. Set NOTION_TOKEN plus NOTION_PIPELINE_DB_ID and/or NOTION_COMPANIES_DB_ID in .env.",
     );
@@ -221,6 +447,9 @@ export async function syncAll() {
   const results = [];
   for (const source of sources) {
     results.push(await syncSource(source));
+  }
+  if (researchPipelineConfigured()) {
+    results.push(await syncResearchPipeline());
   }
   return results;
 }

@@ -4,14 +4,62 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Badge, deliveryTone, likelihoodTone, priorityTone } from "./Badge";
 import { AddCompanyForm } from "./AddCompanyForm";
+import { NotesEditor } from "./NotesEditor";
 import { DELIVERY_MODELS, DELIVERY_MODEL_HELP } from "@/lib/deliveryModels";
 import { formatRelative, THEME_LABELS } from "@/lib/format";
 import type { JobRunRow, ResearchCompanyRow } from "@/lib/types";
 
 const STATUSES = ["New", "Reviewing", "Approved", "Rejected", "Pushed to Notion"];
 
+type SortKey =
+  | "priority"
+  | "name"
+  | "sector"
+  | "deliveryModel"
+  | "grantLikelihood"
+  | "status"
+  | "leads"
+  | "newest";
+
+const SORT_OPTIONS: Array<{ key: SortKey; label: string }> = [
+  { key: "priority", label: "Priority" },
+  { key: "name", label: "Company" },
+  { key: "sector", label: "Sector" },
+  { key: "deliveryModel", label: "Funding model" },
+  { key: "grantLikelihood", label: "Grant odds" },
+  { key: "status", label: "Review status" },
+  { key: "leads", label: "Named leads" },
+  { key: "newest", label: "Newest first" },
+];
+
+/** Ranked so these sort by meaning rather than alphabetically. */
+const MODEL_RANK = ["Grant-maker", "Mixed", "Unknown", "Self-implementer"];
+const ODDS_RANK = ["High", "Medium", "Low"];
+const STATUS_RANK = ["New", "Reviewing", "Approved", "Pushed to Notion", "Rejected"];
+
+function byRank(rank: string[], a: string, b: string) {
+  const ai = rank.indexOf(a);
+  const bi = rank.indexOf(b);
+  return (ai < 0 ? rank.length : ai) - (bi < 0 ? rank.length : bi);
+}
+
+type Sorter = (a: ResearchCompanyRow, b: ResearchCompanyRow) => number;
+
+const SORTERS: Record<SortKey, Sorter> = {
+  priority: (a, b) => a.priority.localeCompare(b.priority) || a.name.localeCompare(b.name),
+  name: (a, b) => a.name.localeCompare(b.name),
+  sector: (a, b) => a.sector.localeCompare(b.sector) || a.name.localeCompare(b.name),
+  deliveryModel: (a, b) =>
+    byRank(MODEL_RANK, a.deliveryModel, b.deliveryModel) || a.name.localeCompare(b.name),
+  grantLikelihood: (a, b) =>
+    byRank(ODDS_RANK, a.grantLikelihood, b.grantLikelihood) || a.name.localeCompare(b.name),
+  status: (a, b) => byRank(STATUS_RANK, a.status, b.status) || a.name.localeCompare(b.name),
+  leads: (a, b) => b.leads.length - a.leads.length || a.name.localeCompare(b.name),
+  newest: (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+};
+
 function isFresh(company: ResearchCompanyRow) {
-  if (company.discoveredBy !== "agent") return false;
+  if (!["agent", "notion"].includes(company.discoveredBy)) return false;
   const age = Date.now() - new Date(company.createdAt).getTime();
   return age < 36 * 60 * 60 * 1000;
 }
@@ -28,10 +76,11 @@ export function ResearchTab({
   const [query, setQuery] = useState("");
   const [modelFilter, setModelFilter] = useState("Grant-maker");
   const [showAdd, setShowAdd] = useState(false);
+  const [sortKey, setSortKey] = useState<SortKey>("priority");
 
   const filtered = useMemo(() => {
     const needle = query.toLowerCase().trim();
-    return companies.filter((company) => {
+    const rows = companies.filter((company) => {
       if (modelFilter !== "all" && company.deliveryModel !== modelFilter) return false;
       if (!needle) return true;
       const haystack = [
@@ -47,7 +96,9 @@ export function ResearchTab({
         .toLowerCase();
       return haystack.includes(needle);
     });
-  }, [companies, query, modelFilter]);
+
+    return [...rows].sort(SORTERS[sortKey]);
+  }, [companies, query, modelFilter, sortKey]);
 
   const leadCount = companies.reduce((total, company) => total + company.leads.length, 0);
   const freshCount = companies.filter(isFresh).length;
@@ -71,6 +122,17 @@ export function ResearchTab({
           {DELIVERY_MODELS.map((model) => (
             <option key={model} value={model}>
               {model}
+            </option>
+          ))}
+        </select>
+        <select
+          value={sortKey}
+          onChange={(event) => setSortKey(event.target.value as SortKey)}
+          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+        >
+          {SORT_OPTIONS.map((option) => (
+            <option key={option.key} value={option.key}>
+              Sort: {option.label}
             </option>
           ))}
         </select>
@@ -250,6 +312,29 @@ function CompanyCard({
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
+          {company.notionPageUrl ? (
+            <a
+              href={company.notionPageUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              In Notion →
+            </a>
+          ) : (
+            <button
+              onClick={pushToNotion}
+              disabled={pushing || !notionConfigured}
+              title={
+                notionConfigured
+                  ? "Creates a row in the CSR Pipeline Tracker, so it shows under Current leads"
+                  : "Connect Notion first"
+              }
+              className="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white disabled:opacity-40 hover:bg-emerald-700"
+            >
+              {pushing ? "Moving…" : "→ Current leads"}
+            </button>
+          )}
           {isFresh(company) && <Badge tone="green">New</Badge>}
           <Badge tone={priorityTone(company.priority)}>{company.priority}</Badge>
           <Badge
@@ -290,7 +375,6 @@ function CompanyCard({
             <Field label="Warm path" value={company.warmPath} />
             <Field label="IIT connection" value={company.iitConnect} />
             <Field label="Evidence it funds outsiders" value={company.externalGrantEvidence} />
-            <Field label="Notes" value={company.notes} />
           </dl>
 
           {company.leads.length > 0 && (
@@ -329,6 +413,11 @@ function CompanyCard({
             </div>
           )}
 
+          <NotesEditor
+            value={company.notes}
+            endpoint={`/api/research/${company.id}`}
+          />
+
           {company.sourceUrls.length > 0 && (
             <div className="flex flex-wrap gap-3 text-xs">
               {company.sourceUrls.map((url) => (
@@ -358,29 +447,6 @@ function CompanyCard({
               ))}
             </select>
 
-            {company.notionPageUrl ? (
-              <a
-                href={company.notionPageUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="text-sm font-medium text-sky-700 underline dark:text-sky-400"
-              >
-                Open in Notion →
-              </a>
-            ) : (
-              <button
-                onClick={pushToNotion}
-                disabled={pushing || !notionConfigured}
-                title={
-                  notionConfigured
-                    ? "Creates a new row in the CSR Pipeline Tracker"
-                    : "Connect Notion first"
-                }
-                className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 disabled:opacity-50 dark:border-slate-700 dark:text-slate-200"
-              >
-                {pushing ? "Pushing…" : "Push to Notion pipeline"}
-              </button>
-            )}
           </div>
 
           {error && <p className="text-sm text-red-600">{error}</p>}
