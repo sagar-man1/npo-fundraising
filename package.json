@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "seed": "tsx prisma/seed.ts",
-    "db:migrate": "prisma migrate deploy",
+    "db:migrate": "prisma migrate deploy && prisma generate",
     "db:studio": "prisma studio",
     "scheduler": "tsx scripts/scheduler.ts",
     "research:now": "tsx scripts/research-now.ts",

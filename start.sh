@@ -47,7 +47,8 @@ if [ "$SKIP_UPDATE" = false ] && [ -d .git ]; then
   fi
 fi
 
-if [ ! -d node_modules ] || [ package.json -nt node_modules ]; then
+# package-lock.json changes on every dependency change, package.json does not.
+if [ ! -d node_modules ] || [ package-lock.json -nt node_modules ]; then
   echo "Installing dependencies (a minute or two the first time)..."
   npm install
   echo

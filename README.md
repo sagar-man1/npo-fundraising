@@ -69,6 +69,10 @@ deleted on GitHub, `update.sh` notices and moves you to `main` automatically.
 
 The first run takes a few minutes; later ones are quick.
 
+**If you ever see a Prisma error like `Unknown argument \`owner\``**, the generated
+database client is out of step with the schema. `./update.sh` fixes it; so does
+`npm run db:migrate` on its own.
+
 **What you should see:** the **Research** tab, populated with ~18 companies, filtered
 to grant-makers. Switch the dropdown to *Self-implementer* to see the deliberate
 passes. **Current leads** will be empty with a "Notion is not connected" banner —
