@@ -8,10 +8,23 @@ import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-const checks: Array<{ ok: boolean; label: string; detail: string; fix?: string }> = [];
+/**
+ * Critical checks are things that break the app for everyone and are decided
+ * purely by the code — CI fails on these. Advisory checks depend on local setup
+ * (your Notion token, your WhatsApp login), so they only ever warn.
+ */
+type Check = {
+  ok: boolean;
+  label: string;
+  detail: string;
+  fix?: string;
+  critical?: boolean;
+};
 
-function add(ok: boolean, label: string, detail: string, fix?: string) {
-  checks.push({ ok, label, detail, fix });
+const checks: Check[] = [];
+
+function add(ok: boolean, label: string, detail: string, fix?: string, critical = false) {
+  checks.push({ ok, label, detail, fix, critical });
 }
 
 // ── Which code is running ────────────────────────────────────────────────────
@@ -35,7 +48,7 @@ const clientModel = "src/generated/prisma/models/Prospect.ts";
 
 if (!fs.existsSync(clientModel)) {
   add(false, "Database client", "not generated",
-    "Run: npm run db:migrate");
+    "Run: npm run db:migrate", true);
 } else {
   const schema = fs.readFileSync(schemaPath, "utf8");
   const client = fs.readFileSync(clientModel, "utf8");
@@ -47,7 +60,7 @@ if (!fs.existsSync(clientModel)) {
 
   if (missing.length) {
     add(false, "Database client", `stale — missing: ${missing.slice(0, 5).join(", ")}`,
-      "This causes 'Unknown argument' errors on sync. Run: npm run db:migrate");
+      "This causes 'Unknown argument' errors on sync. Run: npm run db:migrate", true);
   } else {
     const age = Math.round(
       (Date.now() - fs.statSync(clientModel).mtimeMs) / 60000,
@@ -61,9 +74,9 @@ try {
   const out = execSync("npx prisma migrate status", { encoding: "utf8", stdio: "pipe" });
   const applied = /up to date|No pending migrations/i.test(out);
   add(applied, "Migrations", applied ? "all applied" : "pending migrations",
-    applied ? undefined : "Run: npm run db:migrate");
+    applied ? undefined : "Run: npm run db:migrate", true);
 } catch {
-  add(false, "Migrations", "could not check", "Run: npm run db:migrate");
+  add(false, "Migrations", "could not check", "Run: npm run db:migrate", true);
 }
 
 // ── Notion configuration ─────────────────────────────────────────────────────
@@ -96,9 +109,14 @@ for (const check of checks) {
   if (!check.ok && check.fix) console.log(`      → ${check.fix}`);
 }
 
-const failed = checks.filter((c) => !c.ok).length;
-console.log(
-  failed
-    ? `\n${failed} thing(s) need attention — see the arrows above.\n`
-    : "\nEverything looks right.\n",
-);
+const broken = checks.filter((c) => !c.ok && c.critical);
+const warnings = checks.filter((c) => !c.ok && !c.critical);
+
+if (broken.length) {
+  console.log(`\n${broken.length} thing(s) are broken — see the arrows above.\n`);
+  process.exitCode = 1;
+} else if (warnings.length) {
+  console.log(`\nNothing is broken. ${warnings.length} thing(s) not set up yet.\n`);
+} else {
+  console.log("\nEverything looks right.\n");
+}

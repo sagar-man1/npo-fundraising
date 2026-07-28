@@ -1,0 +1,79 @@
+name: CI
+
+# Runs the same path a person does on a fresh machine: clone, install,
+# migrate, seed, build, boot. Every bug that has reached the user so far was
+# in that path, so this is deliberately an end-to-end setup test rather than
+# a unit-test suite.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  verify:
+    name: Clean-clone setup
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # No secrets in CI — the template alone must be enough to get running.
+      - name: Create .env from the template
+        run: cp .env.example .env
+
+      - name: Install
+        run: npm ci
+
+      - name: Apply migrations
+        run: npm run db:migrate
+
+      # Catches the stale-client class of failure: a schema change that never
+      # reached the generated client, which surfaces as "Unknown argument" at
+      # runtime and is invisible to tsc.
+      - name: Health check
+        run: npm run doctor
+
+      - name: Typecheck
+        run: npx next typegen && npx tsc --noEmit
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Seed
+        run: npm run seed
+
+      - name: Build
+        run: npm run build
+
+      # A build that compiles can still fail on boot — bad env handling, a
+      # broken server component, a route that throws on first render.
+      - name: Boot and smoke-test
+        run: |
+          npm run start &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
+
+          for i in $(seq 1 30); do
+            if curl -sf -o /dev/null http://localhost:3000; then break; fi
+            if [ "$i" = 30 ]; then echo "Server never became ready"; exit 1; fi
+            sleep 2
+          done
+
+          echo "Checking pages and API routes respond..."
+          curl -sf -o /dev/null -w 'GET /            %{http_code}\n' http://localhost:3000/
+          curl -sf -o /dev/null -w 'GET /api/research %{http_code}\n' http://localhost:3000/api/research
+
+          # The seeded companies must actually come back, not just a 200.
+          COUNT=$(curl -sf http://localhost:3000/api/research | node -e \
+            "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>console.log(JSON.parse(d).length))")
+          echo "Research companies returned: $COUNT"
+          if [ "$COUNT" -lt 1 ]; then echo "Seed data did not load"; exit 1; fi
+
+      - name: Verify the update scripts are runnable
+        run: bash -n start.sh && bash -n update.sh && bash -n deploy/install-macos.sh
